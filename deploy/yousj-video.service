@@ -1,0 +1,22 @@
+[Unit]
+Description=Yousj Video server (short-video app relay)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/yousj-video
+Environment=PORT=18088
+Environment=NODE_ENV=production
+# 发信凭据等敏感配置放这个文件（600 权限），不进代码仓库；文件不存在也不报错。
+# 需要的变量名：MAIL_WEBHOOK_URL 或 SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS。
+# ALLOW_DEV_CODE 只许本机开发用，生产环境绝对不要写进这个文件。
+EnvironmentFile=-/etc/yousj-video.env
+ExecStart=/www/server/nodejs/v24.22.1/bin/node server/server.js
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/yousj-video.log
+StandardError=append:/var/log/yousj-video.log
+
+[Install]
+WantedBy=multi-user.target

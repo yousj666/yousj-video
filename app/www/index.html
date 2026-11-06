@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0b0d0c">
+<title>Yousj 短视频</title>
+<link rel="stylesheet" href="style.css">
+<script src="anime.min.js" defer></script>
+</head>
+<body>
+<div id="phone">
+
+  <!-- ===== 登录 / 注册 ===== -->
+  <section id="view-auth" class="view view-auth">
+    <div class="auth-wrap">
+      <div class="auth-logo">Yousj<span>短视频</span></div>
+      <p class="auth-sub">刷朋友的作品，聊正在发生的事</p>
+      <div class="seg" id="auth-seg">
+        <button class="seg-btn active" data-mode="login">登录</button>
+        <button class="seg-btn" data-mode="register">注册</button>
+      </div>
+      <form id="form-login" class="auth-form">
+        <label class="field"><span>邮箱 / 账号</span><input id="login-account" type="text" placeholder="邮箱 / 账号#号" autocomplete="username"></label>
+        <label class="field"><span>密码</span><input id="login-password" type="password" placeholder="请输入密码" autocomplete="current-password"></label>
+        <p class="form-err" id="login-err"></p>
+        <button class="btn-primary" type="submit" id="btn-login">登录</button>
+        <p class="auth-hint">用注册邮箱 + 密码登录，也兼容账号 #号 + 密码。没有账号？点上方「注册」用邮箱注册。</p>
+      </form>
+      <form id="form-register" class="auth-form hidden">
+        <p class="reg-steps"><span class="reg-step active">1 邮箱</span><span class="reg-arrow">→</span><span class="reg-step">2 验证码</span><span class="reg-arrow">→</span><span class="reg-step">3 姓名密码</span></p>
+        <label class="field"><span>① 邮箱</span>
+          <span class="code-row"><input id="reg-email" type="email" placeholder="你的邮箱" autocomplete="email"><button type="button" class="btn-small" id="btn-get-code">获取验证码</button></span>
+        </label>
+        <p class="auth-hint" id="code-sent-hint" style="text-align:left;margin:-6px 0 12px">点「获取验证码」，6 位验证码会发到你的邮箱（发件人 hello@yousj.cc）。</p>
+        <label class="field"><span>② 验证码</span><input id="reg-code" type="text" inputmode="numeric" maxlength="6" placeholder="输入 6 位验证码" autocomplete="one-time-code"></label>
+        <label class="field"><span>③ 姓名（昵称）</span><input id="reg-name" type="text" maxlength="20" placeholder="给自己起个名字" autocomplete="nickname"></label>
+        <label class="field"><span>密码</span><input id="reg-password" type="password" placeholder="至少 6 位" autocomplete="new-password"></label>
+        <p class="form-err" id="reg-err"></p>
+        <button class="btn-primary" type="submit" id="btn-register">完成注册</button>
+        <p class="auth-hint">只能用邮箱注册。注册成功后会分配一个账号 #号，朋友靠它找到你；注册时会在本机生成私信加密密钥，私钥只留在本机、不上传。</p>
+      </form>
+    </div>
+  </section>
+
+  <!-- ===== 主框架 ===== -->
+  <div id="app" class="hidden">
+    <main id="main">
+
+      <!-- 首页 -->
+      <section id="view-home" class="view view-feed">
+        <header class="feed-topbar">
+          <span class="topbar-title active">推荐</span>
+          <span class="topbar-sub">朋友的近况都在这儿</span>
+          <button class="topbar-search-btn" id="btn-top-search" aria-label="搜索"></button>
+        </header>
+        <div id="feed-home" class="feed"></div>
+        <div id="feed-home-state" class="feed-state"></div>
+      </section>
+
+      <!-- 朋友 -->
+      <section id="view-friends" class="view hidden">
+        <header class="page-head">
+          <h1>朋友</h1>
+          <div class="seg seg-sm" id="friends-seg">
+            <button class="seg-btn active" data-tab="works">朋友的作品</button>
+            <button class="seg-btn" data-tab="manage">好友管理 <span class="dot-badge hidden" id="req-badge">0</span></button>
+          </div>
+        </header>
+        <div id="friends-works-pane">
+          <div id="feed-friends" class="feed feed-in-page"></div>
+          <div id="feed-friends-state" class="feed-state feed-state-in-page"></div>
+        </div>
+        <div id="friends-manage-pane" class="scroll-pane hidden">
+          <div class="card">
+            <h2>找朋友</h2>
+            <div class="search-row">
+              <input id="search-q" type="text" placeholder="输入账号 #号 或昵称">
+              <button class="btn-small" id="btn-search">搜索</button>
+            </div>
+            <div id="search-results" class="user-list"></div>
+          </div>
+          <div class="card">
+            <h2>收到的申请 <span class="muted" id="req-count"></span></h2>
+            <div id="request-list" class="user-list"><p class="empty-text">暂无新申请</p></div>
+          </div>
+          <div class="card">
+            <h2>我的好友 <span class="muted" id="friend-count"></span></h2>
+            <div id="friend-list" class="user-list"><p class="empty-text">还没有好友，去上面搜一搜</p></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 发布 -->
+      <section id="view-publish" class="view hidden">
+        <header class="page-head"><h1>发布作品</h1><p class="page-sub">拍好的视频，或者一张色调封面，都能发</p></header>
+        <div class="scroll-pane publish-pane">
+          <div class="seg" id="publish-seg">
+            <button class="seg-btn active" data-mode="video">发视频</button>
+            <button class="seg-btn" data-mode="scene">图文场景</button>
+          </div>
+
+          <div id="publish-video-box">
+            <label class="upload-box" id="upload-box">
+              <input id="file-input" type="file" accept="video/*" hidden>
+              <span class="upload-plus">＋</span>
+              <span class="upload-text" id="upload-text">点这里选择视频文件</span>
+              <span class="upload-hint">尽量保原画：支持 4K 原画上传，分片传输、断点不丢</span>
+            </label>
+            <video id="preview-video" class="preview-video hidden" controls playsinline loop></video>
+            <div id="file-meta" class="file-meta hidden"></div>
+            <div id="quality-note" class="quality-note hidden"></div>
+          </div>
+
+          <div id="publish-scene-box" class="hidden">
+            <div class="scene-preview" id="scene-preview"><span id="scene-preview-text">你的标题会出现在这里</span></div>
+            <p class="label-text">选一个色调</p>
+            <div class="hue-row" id="hue-row"></div>
+          </div>
+
+          <label class="field"><span>标题</span><input id="pub-title" type="text" maxlength="40" placeholder="给作品起个标题（必填）"></label>
+          <label class="field"><span>描述</span><textarea id="pub-desc" rows="3" maxlength="200" placeholder="说说这条作品……（选填）"></textarea></label>
+          <p class="form-err" id="pub-err"></p>
+          <div class="progress hidden" id="pub-progress"><div class="progress-bar" id="pub-progress-bar"></div></div>
+          <p class="progress-text hidden" id="pub-progress-text"></p>
+          <button class="btn-primary" id="btn-publish">发布</button>
+          <button class="btn-ghost" id="btn-publish-cancel">取消</button>
+        </div>
+      </section>
+
+      <!-- 消息 -->
+      <section id="view-messages" class="view hidden">
+        <header class="page-head"><h1>消息</h1><p class="page-sub">🔒 私信端到端加密，服务器只中继密文、看不到内容</p></header>
+        <div id="thread-list" class="scroll-pane"></div>
+      </section>
+
+      <!-- 聊天 -->
+      <section id="view-chat" class="view hidden">
+        <header class="chat-head">
+          <button class="icon-btn" id="btn-chat-back">‹</button>
+          <div class="avatar" id="chat-avatar">?</div>
+          <div class="chat-peer"><strong id="chat-name">朋友</strong><span id="chat-account"></span><span class="chat-lock" id="chat-lock">🔒 端到端加密</span></div>
+          <span class="flex-spacer"></span>
+        </header>
+        <div id="chat-list" class="chat-list"></div>
+        <form id="chat-form" class="chat-inputbar">
+          <input id="chat-input" type="text" maxlength="500" placeholder="发消息…" autocomplete="off">
+          <button type="submit" class="btn-send">发送</button>
+        </form>
+      </section>
+
+      <!-- 我的 -->
+      <section id="view-me" class="view hidden">
+        <div class="scroll-pane">
+          <div class="me-head">
+            <div class="avatar avatar-lg" id="me-avatar">?</div>
+            <div class="me-info">
+              <h1 id="me-name">—</h1>
+              <p class="me-account">账号 <span id="me-account">—</span></p>
+            </div>
+          </div>
+          <div class="me-stats">
+            <div class="stat"><strong id="stat-works">0</strong><span>作品</span></div>
+            <div class="stat"><strong id="stat-friends">0</strong><span>好友</span></div>
+            <div class="stat"><strong id="stat-likes">0</strong><span>获赞</span></div>
+          </div>
+          <div class="seg" id="me-seg">
+            <button class="seg-btn active" data-tab="works">我的作品</button>
+            <button class="seg-btn" data-tab="collections">收藏</button>
+          </div>
+          <div id="me-grid" class="work-grid"></div>
+          <p class="empty-text hidden" id="me-grid-empty">这里还空着</p>
+          <button class="btn-danger-ghost" id="btn-logout">退出登录</button>
+          <p class="version-text">Yousj 短视频 · 经北京服务器中继<br>私信采用 ECDH P-256 + AES-GCM-256 端到端加密，私钥只存本机</p>
+        </div>
+      </section>
+      <!-- 用户主页 -->
+      <section id="view-user" class="view hidden">
+        <header class="profile-topbar">
+          <button class="icon-btn" id="btn-profile-back">‹</button>
+          <strong>主页</strong>
+          <span class="flex-spacer"></span>
+        </header>
+        <div class="scroll-pane">
+          <div class="me-head">
+            <div class="avatar avatar-lg" id="profile-avatar">?</div>
+            <div class="me-info">
+              <h1 id="profile-name">—</h1>
+              <p class="me-account">账号 <span id="profile-account">—</span></p>
+            </div>
+          </div>
+          <div class="me-stats">
+            <div class="stat"><strong id="pstat-works">0</strong><span>作品</span></div>
+            <div class="stat"><strong id="pstat-friends">0</strong><span>好友</span></div>
+            <div class="stat"><strong id="pstat-likes">0</strong><span>获赞</span></div>
+          </div>
+          <div id="profile-actions" class="profile-actions"></div>
+          <div id="profile-grid" class="work-grid"></div>
+          <p class="empty-text hidden" id="profile-grid-empty">这个人还没有发过作品</p>
+        </div>
+      </section>
+
+      <!-- 搜索 -->
+      <section id="view-search" class="view hidden">
+        <header class="search-topbar">
+          <button class="icon-btn" id="btn-search-back">‹</button>
+          <form id="search-form" class="search-form">
+            <input id="search-input" type="search" placeholder="搜作品、标题或用户" autocomplete="off">
+            <button type="submit" class="btn-small" id="btn-do-search">搜索</button>
+          </form>
+        </header>
+        <div class="search-segbar">
+          <div class="seg seg-sm" id="search-seg">
+            <button class="seg-btn active" data-tab="works">作品</button>
+            <button class="seg-btn" data-tab="users">用户</button>
+          </div>
+        </div>
+        <div class="scroll-pane">
+          <p class="empty-text" id="search-hint">输入关键词，搜作品和用户</p>
+          <div id="search-works" class="work-grid hidden"></div>
+          <div id="search-users" class="user-list hidden"></div>
+          <p class="empty-text hidden" id="search-empty">没有找到相关内容，换个关键词试试</p>
+        </div>
+      </section>
+    </main>
+
+    <!-- 底部导航 -->
+    <nav id="tabbar">
+      <button class="tab active" data-nav="home"><span class="tab-ico">⌂</span><span>首页</span></button>
+      <button class="tab" data-nav="friends"><span class="tab-ico">👥</span><span>朋友</span><span class="dot-badge hidden" id="tab-friend-badge"></span></button>
+      <button class="tab tab-publish" data-nav="publish" aria-label="发布"><span class="publish-plus">＋</span></button>
+      <button class="tab" data-nav="messages"><span class="tab-ico">💬</span><span>消息</span><span class="dot-badge hidden" id="tab-msg-badge"></span></button>
+      <button class="tab" data-nav="me"><span class="tab-ico">👤</span><span>我</span></button>
+    </nav>
+  </div>
+
+  <!-- 评论面板 -->
+  <div id="sheet-mask" class="sheet-mask hidden"></div>
+  <section id="comment-sheet" class="sheet hidden">
+    <header class="sheet-head"><strong id="comment-title">评论</strong><button class="icon-btn" data-close-sheet>✕</button></header>
+    <div id="comment-list" class="comment-list"></div>
+    <form id="comment-form" class="sheet-inputbar">
+      <div class="avatar avatar-sm" id="comment-my-avatar">?</div>
+      <input id="comment-input" type="text" maxlength="300" placeholder="说点什么…" autocomplete="off">
+      <button type="submit" class="btn-send">发送</button>
+    </form>
+  </section>
+
+  <!-- 转发面板 -->
+  <section id="share-sheet" class="sheet hidden">
+    <header class="sheet-head"><strong>转发给朋友</strong><button class="icon-btn" data-close-sheet>✕</button></header>
+    <p class="sheet-sub">选一位好友，这条作品会以卡片形式通过 🔒 加密私信发给对方。</p>
+    <div id="share-friend-list" class="user-list sheet-list"></div>
+  </section>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>

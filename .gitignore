@@ -1,0 +1,24 @@
+# 运行时数据（绝不进仓库）
+server/data.json
+server/uploads/
+uploads/
+
+# 环境变量 / 凭据
+*.env
+
+# 签名密钥（丢失意味着无法给同包名发升级版，只在本地保管）
+clients/android/signing/
+
+# 构建产物（成品包走 GitHub Releases）
+clients/android/build/
+clients/android/dist/
+clients/windows/dist/
+clients/windows/.tools/
+clients/windows/third_party/webview2/
+clients/windows/third_party/webview2.nupkg
+*.o
+
+# 备份与生成文件
+*.bak
+*.bak-*
+Yousj短视频.html

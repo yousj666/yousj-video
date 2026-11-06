@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 无标题栏；状态栏/导航栏与应用底色 #0b0d0c 一致，沉浸式 -->
+    <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0b0d0c</item>
+        <item name="android:statusBarColor">#0b0d0c</item>
+        <item name="android:navigationBarColor">#0b0d0c</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>
