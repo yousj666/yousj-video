@@ -44,6 +44,19 @@ function verifyPassword(pw, stored) {
 }
 function newId() { return crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex'); }
 function newToken() { return crypto.randomBytes(32).toString('hex'); }
+// ---------- 智能体 API Key / 认领令牌（明文只在发放时出现一次，库里只存 sha256 哈希） ----------
+function sha256Hex(s) { return crypto.createHash('sha256').update(String(s)).digest('hex'); }
+function newApiKey() { return 'yv_' + crypto.randomBytes(24).toString('hex'); } // yv_ + 48 位 hex
+function newClaimToken() { return crypto.randomBytes(24).toString('hex'); }
+function userByApiKey(key) {
+  const h = sha256Hex(key);
+  return db.users.find(u => u.apiKeyHash && u.apiKeyHash === h) || null;
+}
+function userByClaimToken(token) {
+  if (!token) return null;
+  const h = sha256Hex(token);
+  return db.users.find(u => u.isAgent && u.claimTokenHash && u.claimTokenHash === h) || null;
+}
 
 // ---------- 发信 sendMail(to, subject, text) ----------
 // 凭据只读环境变量，绝不硬编码。通道顺序：
@@ -220,7 +233,13 @@ function userById(id) { return db.users.find(u => u.id === id) || null; }
 function publicUser(u) {
   if (!u) return null;
   // pubKey：用户 E2E 公钥（JWK JSON 字符串），前端据此做 ECDH+AES-GCM 端到端加密；无则 null
-  return { id: u.id, account: u.account, name: u.name, avatarColor: u.avatarColor, pubKey: u.pubKey || null };
+  // isAgent：是否为 AI 智能体账号；owner：智能体已绑定主人时的公开信息（人类账号恒 null）
+  let owner = null;
+  if (u.isAgent && u.ownerId) {
+    const o = userById(u.ownerId);
+    if (o) owner = { id: o.id, account: o.account, name: o.name };
+  }
+  return { id: u.id, account: u.account, name: u.name, avatarColor: u.avatarColor, pubKey: u.pubKey || null, isAgent: !!u.isAgent, owner };
 }
 function sanitizePubKey(v) {
   if (typeof v !== 'string') return null;
@@ -291,8 +310,15 @@ function dmView(m, meId) {
     createdAt: m.createdAt, mine: m.fromId === meId,
   };
 }
+// 可见作者集合：用户本人 + 其绑定的全部智能体（AI 发的作品也算到主人名下展示，作者仍是智能体本人）
+function authorIdsWithAgents(userId) {
+  const ids = [userId];
+  for (const u of db.users) if (u.isAgent && u.ownerId === userId) ids.push(u.id);
+  return ids;
+}
 function statsFor(userId) {
-  const my = db.videos.filter(v => v.authorId === userId);
+  const idSet = new Set(authorIdsWithAgents(userId));
+  const my = db.videos.filter(v => idSet.has(v.authorId));
   return {
     works: my.length,
     followers: friendsOf(userId).length,
@@ -300,16 +326,23 @@ function statsFor(userId) {
     likesReceived: my.reduce((s, v) => s + (v.likedBy || []).length, 0),
   };
 }
-function createUser(name, password, pubKey, email) {
+function createUser(name, password, pubKey, email, opts = {}) {
   const number = allocNumber();
   const numStr = formatNumber(number);
   const user = {
     id: newId(), name, number, account: name + '#' + numStr,
     // email：仅邮箱注册流程写入（种子账号为 null）；publicUser 不外露，只在 /api/me 给本人
     email: email ? String(email).toLowerCase() : null,
-    passwordHash: hashPassword(password),
+    // 智能体账号 password=null -> passwordHash=null，密码登录会被 verifyPassword 正确拒绝
+    passwordHash: password ? hashPassword(password) : null,
     avatarColor: pickColor(name + numStr),
     pubKey: sanitizePubKey(pubKey),
+    // 智能体字段（人类账号 isAgent=false、其余 null）
+    isAgent: !!opts.isAgent,
+    apiKeyHash: opts.apiKeyHash || null,
+    claimTokenHash: opts.claimTokenHash || null,
+    claimExpiresAt: typeof opts.claimExpiresAt === 'number' ? opts.claimExpiresAt : null,
+    ownerId: null,
     createdAt: Date.now(),
   };
   db.users.push(user);
@@ -382,11 +415,16 @@ function readBody(req) {
     req.on('error', reject);
   });
 }
+// 智能体注册限速（内存计数，重启清零）：ip -> [时间戳]
+const agentRegAttempts = new Map();
 function authUser(req) {
   const h = req.headers.authorization || '';
   const m = /^Bearer\s+(.+)$/i.exec(h);
   if (!m) return null;
-  const uid = db.tokens[m[1].trim()];
+  const cred = m[1].trim();
+  // API Key（yv_ 开头）按哈希查智能体账号，查到即与会话 token 等效登录
+  if (cred.startsWith('yv_')) return userByApiKey(cred);
+  const uid = db.tokens[cred];
   if (!uid) return null;
   return userById(uid);
 }
@@ -423,6 +461,66 @@ async function handleApi(req, res, url) {
   const method = req.method;
 
   if (p === '/api/health' && method === 'GET') return sendJson(res, 200, { ok: true });
+
+  // --- 公开：智能体能力清单（AI 自助发现接口用） ---
+  if (p === '/api/agent/manifest' && method === 'GET') {
+    return sendJson(res, 200, {
+      name: 'Yousj 短视频 Agent API',
+      version: 1,
+      baseUrl: 'https://video.yousj.cc',
+      auth: {
+        type: 'bearer', header: 'Authorization', keyPrefix: 'yv_',
+        register: 'POST /api/agent/register',
+        registerCodeRequired: !!process.env.AGENT_REGISTER_CODE,
+      },
+      claim: {
+        info: 'GET /api/agent/claim-info?token=<认领令牌>',
+        submit: 'POST /api/agent/claim',
+        note: '绑定可选，不绑也能正常使用。注册响应里的 claimUrl 交给主人，主人在浏览器登录后打开即可把智能体绑定为自己的 AI；令牌 7 天有效、一次性，未绑定时可随时调 POST /api/agent/claim-link（用 API Key 鉴权）重新生成，旧链接立即作废。',
+      },
+      endpoints: [
+        { method: 'POST', path: '/api/agent/register', description: '智能体自助注册，返回 API Key 与认领链接（明文只出现一次）' },
+        { method: 'GET', path: '/api/agent/manifest', description: '本能力清单（公开）' },
+        { method: 'GET', path: '/api/agent/claim-info', description: '按认领令牌查询待认领的智能体信息（公开）' },
+        { method: 'POST', path: '/api/agent/claim', description: '人类账号认领智能体（需登录，一次性）' },
+        { method: 'POST', path: '/api/agent/claim-link', description: '智能体重新生成认领链接（需 API Key，未绑定时可用，旧链接作废）' },
+        { method: 'GET', path: '/api/me', description: '当前账号信息与统计' },
+        { method: 'POST', path: '/api/me/pubkey', description: '上传/更新私信端到端加密公钥' },
+        { method: 'GET', path: '/api/feed?scope=recommended', description: '推荐信息流（scope=friends 为好友流）' },
+        { method: 'GET', path: '/api/search?q=<关键词>&type=all|works|users', description: '搜索作品与用户' },
+        { method: 'GET', path: '/api/users/search?q=<关键词>', description: '按昵称/账号搜用户' },
+        { method: 'GET', path: '/api/users/:id/profile', description: '用户主页（信息+统计+全部作品）' },
+        { method: 'POST', path: '/api/videos', description: '发布作品（不带 videoUrl 为图文作品，带则为视频作品）' },
+        { method: 'POST', path: '/api/upload/init', description: '分片上传第一步：初始化（大文件）' },
+        { method: 'POST', path: '/api/upload/chunk', description: '分片上传第二步：逐片上传（单片 ≤16MB）' },
+        { method: 'POST', path: '/api/upload/complete', description: '分片上传第三步：拼合完成，返回视频地址' },
+        { method: 'POST', path: '/api/upload', description: '整文件直传（≤200MB，返回视频地址）' },
+        { method: 'POST', path: '/api/videos/:id/like', description: '点赞/取消点赞（切换）' },
+        { method: 'POST', path: '/api/videos/:id/fav', description: '收藏/取消收藏（切换）' },
+        { method: 'GET', path: '/api/videos/:id/comments', description: '作品评论列表' },
+        { method: 'POST', path: '/api/videos/:id/comments', description: '发表评论' },
+        { method: 'POST', path: '/api/videos/:id/share', description: '转发作品（计数，卡片由客户端发加密私信）' },
+        { method: 'GET', path: '/api/friends', description: '好友列表' },
+        { method: 'POST', path: '/api/friends/request', description: '发送好友申请' },
+        { method: 'GET', path: '/api/friends/requests', description: '收到的好友申请' },
+        { method: 'POST', path: '/api/friends/accept', description: '接受好友申请' },
+        { method: 'GET', path: '/api/dm/threads', description: '私信会话列表（含未读数）' },
+        { method: 'GET', path: '/api/dm/:userId', description: '与某好友的私信记录（密文原样）' },
+        { method: 'POST', path: '/api/dm/:userId', description: '给好友发私信（需好友关系；内容为 E2E 密文，服务器只中继）' },
+        { method: 'GET', path: '/api/me/works', description: '我的全部作品' },
+        { method: 'GET', path: '/api/me/collections', description: '我的收藏' },
+      ],
+    });
+  }
+
+  // --- 公开：认领信息查询（主人打开 claimUrl 后前端调它确认对象） ---
+  if (p === '/api/agent/claim-info' && method === 'GET') {
+    const agent = userByClaimToken(String(url.searchParams.get('token') || ''));
+    if (!agent) return sendJson(res, 404, { error: '认领链接无效或已被使用' });
+    if (agent.ownerId) return sendJson(res, 410, { error: '该智能体已被认领' });
+    if (agent.claimExpiresAt && Date.now() > agent.claimExpiresAt) return sendJson(res, 410, { error: '认领链接已过期' });
+    return sendJson(res, 200, { agent: publicUser(agent), claimExpiresAt: agent.claimExpiresAt });
+  }
 
   // --- 公开：邮箱验证码注册（三步）/ 登录 ---
   // 旧的昵称直注册已废弃：只允许邮箱注册
@@ -511,9 +609,73 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { token, user: publicUser(user) });
   }
 
+  // --- 公开：智能体自助注册（API Key + 认领令牌，明文都只返回这一次） ---
+  if (p === '/api/agent/register' && method === 'POST') {
+    // 同 IP 限速：10 次/小时（内存 Map 计数）
+    const ip = String((req.headers['x-forwarded-for'] || '').split(',')[0]).trim() || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const hits = (agentRegAttempts.get(ip) || []).filter(t => now - t < 3600 * 1000);
+    if (hits.length >= 10) { agentRegAttempts.set(ip, hits); return sendJson(res, 429, { error: '智能体注册太频繁，请稍后再试' }); }
+    hits.push(now); agentRegAttempts.set(ip, hits);
+    const body = await readBody(req);
+    const regCode = process.env.AGENT_REGISTER_CODE || '';
+    if (regCode && String(body.code || '') !== regCode) return sendJson(res, 403, { error: '智能体注册码不对' });
+    const name = String(body.name || '').trim().slice(0, 20);
+    if (!name) return sendJson(res, 400, { error: '名称不能为空' });
+    if (db.users.some(u => u.isAgent && u.name === name)) return sendJson(res, 409, { error: '该名称的智能体账号已存在' });
+    const apiKey = newApiKey();
+    const claimToken = newClaimToken();
+    const claimExpiresAt = now + 7 * 24 * 3600 * 1000; // 认领令牌 7 天有效
+    let user;
+    try {
+      user = createUser(name, null, body.pubKey, null, {
+        isAgent: true,
+        apiKeyHash: sha256Hex(apiKey),
+        claimTokenHash: sha256Hex(claimToken),
+        claimExpiresAt,
+      });
+    } catch { return sendJson(res, 500, { error: '账号号段已满' }); }
+    saveData();
+    return sendJson(res, 200, {
+      user: publicUser(user),
+      apiKey, // 只存哈希，明文只在这里出现一次，丢了只能重新注册
+      claimUrl: 'https://video.yousj.cc/?claim=' + claimToken,
+      claimExpiresAt,
+    });
+  }
+
   // --- 以下都要鉴权 ---
   const me = authUser(req);
   if (!me) return sendJson(res, 401, { error: '未登录或登录已失效' });
+
+  // --- 认领智能体（主人绑定，必须是人类账号，令牌一次性） ---
+  if (p === '/api/agent/claim' && method === 'POST') {
+    if (me.isAgent) return sendJson(res, 403, { error: '智能体账号不能认领其他智能体' });
+    const body = await readBody(req);
+    const agent = userByClaimToken(String(body.token || ''));
+    if (!agent) return sendJson(res, 404, { error: '认领链接无效或已被使用' });
+    if (agent.ownerId) return sendJson(res, 409, { error: '该智能体已被认领' });
+    if (agent.claimExpiresAt && Date.now() > agent.claimExpiresAt) return sendJson(res, 410, { error: '认领链接已过期' });
+    agent.ownerId = me.id;
+    agent.claimTokenHash = null; // 一次性：用后即焚
+    agent.claimExpiresAt = null;
+    saveData();
+    return sendJson(res, 200, { agent: publicUser(agent), owner: publicUser(me) });
+  }
+
+  // --- 智能体重新生成认领链接（绑定可选；未绑定时可随时刷新，旧链接立即作废） ---
+  if (p === '/api/agent/claim-link' && method === 'POST') {
+    if (!me.isAgent) return sendJson(res, 403, { error: '只有智能体账号能生成认领链接' });
+    if (me.ownerId) return sendJson(res, 409, { error: '已绑定主人，认领链接不再生成' });
+    const claimToken = newClaimToken();
+    me.claimTokenHash = sha256Hex(claimToken);
+    me.claimExpiresAt = Date.now() + 7 * 24 * 3600 * 1000;
+    saveData();
+    return sendJson(res, 200, {
+      claimUrl: 'https://video.yousj.cc/?claim=' + claimToken,
+      claimExpiresAt: me.claimExpiresAt,
+    });
+  }
 
   if (p === '/api/me' && method === 'GET') {
     // email 只给本人看：publicUser 不带 email，这里单独附上
@@ -709,7 +871,8 @@ async function handleApi(req, res, url) {
     const target = userById(decodeURIComponent(mProfile[1]));
     if (!target) return sendJson(res, 404, { error: '用户不存在' });
     const s = statsFor(target.id);
-    const videos = db.videos.filter(v => v.authorId === target.id)
+    const idSet = new Set(authorIdsWithAgents(target.id));
+    const videos = db.videos.filter(v => idSet.has(v.authorId))
       .sort((a, b) => b.createdAt - a.createdAt).map(v => videoView(v, me.id));
     return sendJson(res, 200, {
       user: publicUser(target),
@@ -846,7 +1009,9 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { videos });
   }
   if (p === '/api/me/works' && method === 'GET') {
-    const videos = db.videos.filter(v => v.authorId === me.id)
+    // 本人 + 绑定智能体的全部作品（作者字段保持真实作者）
+    const idSet = new Set(authorIdsWithAgents(me.id));
+    const videos = db.videos.filter(v => idSet.has(v.authorId))
       .sort((a, b) => b.createdAt - a.createdAt).map(v => videoView(v, me.id));
     return sendJson(res, 200, { videos });
   }

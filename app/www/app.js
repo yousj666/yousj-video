@@ -81,6 +81,8 @@ const ICONS = {
   share: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14 9V5l7 7-7 7v-4.1c-5 0-8.5 1.6-11 5.1 1-5 4-10 11-11z"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>'
 };
+/* AI 智能体徽标：作者是智能体账号（isAgent）时在名字旁显示 */
+function agentBadgeHTML(u) { return u && u.isAgent ? '<span class="agent-badge">AI</span>' : ''; }
 /* 动效只有 Anime.js 一个引擎（自托管 anime.min.js）；没加载成功时用原生 WAAPI 兜底，绝不混第二套库 */
 function pulseEl(el, big) {
   if (!el) return;
@@ -310,7 +312,7 @@ const NAV_VIEWS = ['home', 'friends', 'publish', 'messages', 'me', 'search'];
 function showView(name) {
   if (name !== 'chat') stopChatPolling();
   state.view = name;
-  ['home', 'friends', 'publish', 'messages', 'chat', 'me', 'user', 'search'].forEach(v => {
+  ['home', 'friends', 'publish', 'messages', 'chat', 'me', 'user', 'search', 'claim'].forEach(v => {
     const el = $('#view-' + v);
     if (el) el.classList.toggle('hidden', v !== name);
   });
@@ -423,6 +425,7 @@ async function enterApp() {
   state.homeLoaded = false; state.friendsLoaded = false;
   showView('home');
   refreshBadges();
+  maybeOpenClaim(); // 有待认领的智能体（?claim= 带入）时，进 App 后直接去确认
 }
 
 /* ---------- 信息流 ---------- */
@@ -444,7 +447,7 @@ function slideHTML(v) {
       '<button class="rail-btn" data-act="share"><span class="rail-ico">' + ICONS.share + '</span><span class="share-count">' + fmtCount(v.shareCount) + '</span></button>' +
     '</div>' +
     '<div class="slide-bottom">' +
-      '<div class="slide-author" data-act="author">@' + esc(a.name || '') + ' <span style="color:rgba(255,255,255,.6);font-weight:400;font-size:13px">#' + esc(a.account || '') + '</span>' + (v.isFriend ? '<span class="friend-tag">好友</span>' : '') + '</div>' +
+      '<div class="slide-author" data-act="author">@' + esc(a.name || '') + ' <span style="color:rgba(255,255,255,.6);font-weight:400;font-size:13px">#' + esc(a.account || '') + '</span>' + (v.isFriend ? '<span class="friend-tag">好友</span>' : '') + agentBadgeHTML(a) + '</div>' +
       '<div class="slide-title">' + esc(v.title || '') + '</div>' +
       (v.desc ? '<div class="slide-desc">' + esc(v.desc) + '</div>' : '') +
       '<div class="slide-time">' + relTime(v.createdAt) + ((v.width && v.height) ? ' · ' + resLabel(v.width, v.height) + ' ' + v.width + '×' + v.height : '') + (v.durationSec ? ' · ' + fmtDuration(v.durationSec) : '') + '</div>' +
@@ -670,7 +673,7 @@ function initSheets() {
 function commentRowHTML(c) {
   const u = c.author || c.user || {};
   return '<div class="comment-row"><span class="c-avatar" data-author="' + esc(u.id || '') + '" role="button" aria-label="看作者主页">' + avatarHTML(u, 'avatar-sm') + '</span>' +
-    '<div class="comment-body"><div class="c-name">' + esc(u.name || '用户') + ' · #' + esc(u.account || '') + '</div>' +
+    '<div class="comment-body"><div class="c-name">' + esc(u.name || '用户') + agentBadgeHTML(u) + ' · #' + esc(u.account || '') + '</div>' +
     '<div class="c-text">' + esc(c.text || '') + '</div><div class="c-time">' + relTime(c.createdAt) + '</div></div></div>';
 }
 function appendComment(c) {
@@ -710,7 +713,7 @@ async function openShare(id) {
     }
     state.friends.forEach(cacheUserPubKey);
     box.innerHTML = state.friends.map(u =>
-      '<div class="user-row">' + avatarHTML(u) + '<div class="user-meta"><strong>' + esc(u.name) + '</strong><span>#' + esc(u.account) + (peerPubKey(u) ? ' · 🔒 可加密' : ' · 未启用加密') + '</span></div>' +
+      '<div class="user-row">' + avatarHTML(u) + '<div class="user-meta"><strong>' + esc(u.name) + '</strong>' + agentBadgeHTML(u) + '<span>#' + esc(u.account) + (peerPubKey(u) ? ' · 🔒 可加密' : ' · 未启用加密') + '</span></div>' +
       '<button class="btn-mini primary" data-share-to="' + esc(u.id) + '">发送</button></div>').join('');
     $$('[data-share-to]', box).forEach(b => b.addEventListener('click', async () => {
       b.disabled = true; b.textContent = '加密发送中…';
@@ -767,7 +770,7 @@ function renderFriendList() {
   $('#friend-count').textContent = state.friends.length ? '（' + state.friends.length + '）' : '';
   if (!state.friends.length) { box.innerHTML = '<p class="empty-text">还没有好友，去上面搜一搜</p>'; return; }
   box.innerHTML = state.friends.map(u =>
-    '<div class="user-row">' + avatarHTML(u) + '<div class="user-meta"><strong>' + esc(u.name) + '</strong><span>#' + esc(u.account) + '</span></div>' +
+    '<div class="user-row">' + avatarHTML(u) + '<div class="user-meta"><strong>' + esc(u.name) + '</strong>' + agentBadgeHTML(u) + '<span>#' + esc(u.account) + '</span></div>' +
     '<button class="btn-mini primary" data-dm="' + esc(u.id) + '">私信</button></div>').join('');
   $$('[data-dm]', box).forEach(b => b.addEventListener('click', () => {
     const u = state.friends.find(f => String(f.id) === String(b.dataset.dm));
@@ -779,7 +782,7 @@ function renderRequestList() {
   if (!state.requests.length) { box.innerHTML = '<p class="empty-text">暂无新申请</p>'; updateReqBadge(); return; }
   box.innerHTML = state.requests.map(r => {
     const u = r.from || r.user || r;
-    return '<div class="user-row">' + avatarHTML(u) + '<div class="user-meta"><strong>' + esc(u.name) + '</strong><span>#' + esc(u.account) + ' 想加你为好友</span></div>' +
+    return '<div class="user-row">' + avatarHTML(u) + '<div class="user-meta"><strong>' + esc(u.name) + '</strong>' + agentBadgeHTML(u) + '<span>#' + esc(u.account) + ' 想加你为好友</span></div>' +
       '<button class="btn-mini primary" data-accept="' + esc(u.id) + '">同意</button></div>';
   }).join('');
   $$('[data-accept]', box).forEach(b => b.addEventListener('click', async () => {
@@ -820,7 +823,7 @@ async function doSearch() {
     if (!users.length) { box.innerHTML = '<p class="empty-text">没找到这个用户，确认下账号 #号或昵称</p>'; return; }
     const friendIds = new Set(state.friends.map(f => String(f.id)));
     box.innerHTML = users.map(u =>
-      '<div class="user-row">' + avatarHTML(u) + '<div class="user-meta"><strong>' + esc(u.name) + '</strong><span>#' + esc(u.account) + '</span></div>' +
+      '<div class="user-row">' + avatarHTML(u) + '<div class="user-meta"><strong>' + esc(u.name) + '</strong>' + agentBadgeHTML(u) + '<span>#' + esc(u.account) + '</span></div>' +
       (friendIds.has(String(u.id))
         ? '<button class="btn-mini" data-dm2="' + esc(u.id) + '">私信</button>'
         : '<button class="btn-mini primary" data-req="' + esc(u.id) + '">加好友</button>') + '</div>').join('');
@@ -1191,16 +1194,18 @@ function initMe() {
   }));
   $('#btn-logout').addEventListener('click', () => logout(true));
 }
-function workCellHTML(v) {
+function workCellHTML(v, ownerId) {
   const media = v.kind === 'scene' || !v.videoUrl
     ? '<span class="cell-scene" style="' + hueBg(v.posterHue) + '">' + esc(v.title || '') + '</span>'
     : '<video src="' + esc(v.videoUrl) + '" muted playsinline preload="metadata"></video>';
-  return '<button class="work-cell" data-work="' + esc(v.id) + '">' + media + '<span class="cell-count">' + ICONS.heart + fmtCount(v.likeCount) + '</span></button>';
+  // 作品出自页面主人绑定的 AI（不是页面主人本人）时，封面左上角打 AI 角标，一眼分清谁发的
+  const aiTag = v.author && v.author.isAgent && String(v.author.id) !== String(ownerId || '') ? '<span class="agent-badge cell-badge">AI</span>' : '';
+  return '<button class="work-cell" data-work="' + esc(v.id) + '">' + media + aiTag + '<span class="cell-count">' + ICONS.heart + fmtCount(v.likeCount) + '</span></button>';
 }
 function renderMeGrid() {
   const list = state.meTab === 'works' ? state.meWorks : state.meCollections;
   const grid = $('#me-grid');
-  grid.innerHTML = list.map(workCellHTML).join('');
+  grid.innerHTML = list.map(v => workCellHTML(v, me && me.id)).join('');
   $('#me-grid-empty').classList.toggle('hidden', list.length > 0);
   $('#me-grid-empty').textContent = state.meTab === 'works' ? '还没有作品，点中间的 ＋ 发一条' : '还没有收藏，在首页看到喜欢的点 ⭐ 收藏';
   $$('[data-work]', grid).forEach(b => b.addEventListener('click', () => openWork(b.dataset.work)));
@@ -1274,6 +1279,13 @@ function renderProfileHead(u, d) {
   $('#profile-avatar').outerHTML = avatarHTML(u, 'avatar-lg').replace('class="avatar avatar-lg"', 'class="avatar avatar-lg" id="profile-avatar"');
   $('#profile-name').textContent = u.name || '—';
   $('#profile-account').textContent = u.account ? '#' + u.account : '';
+  const pb = $('#profile-agent-badge');
+  if (pb) pb.classList.toggle('hidden', !(u && u.isAgent));
+  const ow = $('#profile-owner');
+  if (ow) {
+    if (u && u.isAgent && u.owner) { ow.textContent = '主人：' + u.owner.name + ' #' + u.owner.account; ow.classList.remove('hidden'); }
+    else ow.classList.add('hidden');
+  }
   if (d && d.stats) {
     $('#pstat-works').textContent = fmtCount(d.stats.works);
     $('#pstat-friends').textContent = fmtCount(d.stats.friends);
@@ -1308,7 +1320,7 @@ function renderProfileActions(d) {
 function renderProfileGrid(videos) {
   const grid = $('#profile-grid');
   $('#profile-grid-empty').classList.toggle('hidden', videos.length > 0);
-  grid.innerHTML = videos.map(workCellHTML).join('');
+  grid.innerHTML = videos.map(v => workCellHTML(v, profileData && profileData.user ? profileData.user.id : null)).join('');
   $$('[data-work]', grid).forEach(b => b.addEventListener('click', () => openWork(b.dataset.work)));
 }
 function initProfile() {
@@ -1364,7 +1376,7 @@ async function runSearch() {
 }
 function searchUserRowHTML(u) {
   return '<div class="user-row search-user-row" data-user="' + esc(u.id) + '" role="button">' + avatarHTML(u) +
-    '<div class="user-meta"><strong>' + esc(u.name || '') + '</strong><span>#' + esc(u.account || '') + '</span></div>' +
+    '<div class="user-meta"><strong>' + esc(u.name || '') + '</strong>' + agentBadgeHTML(u) + '<span>#' + esc(u.account || '') + '</span></div>' +
     (u.isFriend ? '<span class="friend-badge">好友</span>' : '') + '</div>';
 }
 function renderSearchResults() {
@@ -1384,7 +1396,7 @@ function renderSearchResults() {
   const d = searchState.data || { videos: [], users: [] };
   if (searchState.tab === 'works') {
     if (d.videos.length) {
-      works.innerHTML = d.videos.map(workCellHTML).join('');
+      works.innerHTML = d.videos.map(v => workCellHTML(v, me && me.id)).join('');
       works.classList.remove('hidden');
       $$('[data-work]', works).forEach(b => b.addEventListener('click', () => openWork(b.dataset.work)));
     } else {
@@ -1403,6 +1415,65 @@ function renderSearchResults() {
   }
 }
 
+/* ---------- 认领智能体（主人打开 ?claim=<令牌> 链接绑定 AI） ---------- */
+let claimState = { token: '', agent: null };
+function initClaim() {
+  try {
+    const t = new URLSearchParams(location.search).get('claim');
+    if (t) {
+      sessionStorage.setItem('yv_claim', t); // 先存下：未登录时登录成功后再回到确认页
+      history.replaceState(null, '', location.pathname); // 地址栏抹掉令牌，别留在历史里
+    }
+  } catch (e) { /* URL 解析异常不阻塞启动 */ }
+  const dismiss = () => { sessionStorage.removeItem('yv_claim'); showView('home'); };
+  $('#btn-claim-back').addEventListener('click', dismiss);
+  $('#btn-claim-cancel').addEventListener('click', dismiss);
+  $('#btn-claim-home').addEventListener('click', dismiss);
+  $('#btn-claim-confirm').addEventListener('click', submitClaim);
+}
+function maybeOpenClaim() {
+  let t = null;
+  try { t = sessionStorage.getItem('yv_claim'); } catch (e) {}
+  if (t) openClaimView(t);
+}
+async function openClaimView(claimToken) {
+  claimState = { token: claimToken, agent: null };
+  showView('claim');
+  $('#claim-loading').classList.remove('hidden');
+  $('#claim-body').classList.add('hidden');
+  $('#claim-invalid').classList.add('hidden');
+  $('#claim-err').textContent = '';
+  try {
+    const d = await api('GET', '/api/agent/claim-info?token=' + encodeURIComponent(claimToken));
+    claimState.agent = d.agent;
+    const u = d.agent;
+    $('#claim-avatar').outerHTML = avatarHTML(u, 'avatar-lg').replace('class="avatar avatar-lg"', 'class="avatar avatar-lg" id="claim-avatar"');
+    $('#claim-name').textContent = u.name || '—';
+    $('#claim-account').textContent = u.account ? '#' + u.account : '';
+    $('#claim-loading').classList.add('hidden');
+    $('#claim-body').classList.remove('hidden');
+  } catch (e) {
+    $('#claim-loading').classList.add('hidden');
+    $('#claim-invalid').classList.remove('hidden');
+    $('#claim-invalid-text').textContent = e.message || '认领链接无效。';
+    try { sessionStorage.removeItem('yv_claim'); } catch (err) {}
+  }
+}
+async function submitClaim() {
+  if (!claimState.agent) return;
+  const btn = $('#btn-claim-confirm');
+  btn.disabled = true; btn.textContent = '绑定中…';
+  try {
+    const d = await api('POST', '/api/agent/claim', { token: claimState.token });
+    try { sessionStorage.removeItem('yv_claim'); } catch (e) {}
+    toast('已绑定「' + (d.agent.name || '智能体') + '」为你的 AI');
+    openProfile(d.agent.id, d.agent);
+  } catch (e) {
+    $('#claim-err').textContent = e.message;
+    btn.disabled = false; btn.textContent = '绑定为我的 AI';
+  }
+}
+
 /* ---------- 启动 ---------- */
 function initNav() {
   $$('#tabbar .tab').forEach(t => t.addEventListener('click', () => {
@@ -1412,7 +1483,7 @@ function initNav() {
   }));
 }
 document.addEventListener('DOMContentLoaded', () => {
-  initAuth(); initSheets(); initFriends(); initChat(); initPublish(); initMe(); initNav(); initProfile(); initSearch();
+  initAuth(); initSheets(); initFriends(); initChat(); initPublish(); initMe(); initNav(); initProfile(); initClaim(); initSearch();
   if (token && me) enterApp();
   else {
     $('#view-auth').classList.remove('hidden');

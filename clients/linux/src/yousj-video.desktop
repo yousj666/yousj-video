@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Yousj 短视频
+Comment=刷朋友的作品，聊正在发生的事
+Exec=/opt/yousj-video/YousjVideo
+Icon=yousj-video
+Terminal=false
+Categories=AudioVideo;Network;
+StartupWMClass=YousjVideo

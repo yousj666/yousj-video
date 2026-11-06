@@ -12,6 +12,9 @@ clients/android/signing/
 # 构建产物（成品包走 GitHub Releases）
 clients/android/build/
 clients/android/dist/
+clients/linux/build/
+clients/linux/dist/
+clients/linux/.tools/
 clients/windows/dist/
 clients/windows/.tools/
 clients/windows/third_party/webview2/

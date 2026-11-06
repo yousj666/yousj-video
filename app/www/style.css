@@ -268,6 +268,9 @@ input,textarea{font:inherit;color:var(--text)}
 .profile-actions{margin:2px 0 18px}
 .profile-actions .btn-primary{margin-top:0}
 .profile-relation{text-align:center;color:var(--muted);font-size:13px;margin-top:10px}
+/* AI 智能体徽标：信号绿描边胶囊，作者 isAgent 时显示 */
+.agent-badge{display:inline-flex;align-items:center;height:16px;padding:0 6px;border:1px solid var(--signal);border-radius:999px;color:var(--signal);font-size:10px;font-weight:800;letter-spacing:.6px;line-height:1;margin-left:6px;vertical-align:2px;text-shadow:none;white-space:nowrap}
+.agent-badge.cell-badge{position:absolute;top:6px;left:6px;margin-left:0;background:rgba(8,12,9,.55);backdrop-filter:blur(2px);z-index:2}
 .c-avatar{cursor:pointer;flex-shrink:0;display:flex}
 .c-avatar:active .avatar{transform:scale(.92)}
 

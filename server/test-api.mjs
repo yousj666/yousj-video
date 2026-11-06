@@ -317,6 +317,139 @@ try {
   const schNoAuth = await api('GET', '/api/search?q=' + encodeURIComponent(KW), {});
   check('未登录搜 401', schNoAuth.status === 401, String(schNoAuth.status));
 
+  // ===== 智能体开放 API：manifest + 开放注册（主实例未设 AGENT_REGISTER_CODE） =====
+  const manifest = await api('GET', '/api/agent/manifest', {});
+  check('manifest 公开可读且 registerCodeRequired=false', manifest.status === 200 && manifest.j.name === 'Yousj 短视频 Agent API' && manifest.j.version === 1 && manifest.j.auth.registerCodeRequired === false && manifest.j.auth.keyPrefix === 'yv_', JSON.stringify(manifest.j).slice(0, 200));
+  check('manifest endpoints 覆盖注册/发作品/私信', Array.isArray(manifest.j.endpoints) && manifest.j.endpoints.some(e => e.method === 'POST' && e.path === '/api/agent/register') && manifest.j.endpoints.some(e => e.method === 'POST' && e.path === '/api/videos') && manifest.j.endpoints.some(e => e.path === '/api/dm/:userId'), JSON.stringify((manifest.j.endpoints || []).length));
+  const meHuman = await api('GET', '/api/me', { token: tA });
+  check('人类账号 publicUser.isAgent=false 且 owner=null', meHuman.status === 200 && meHuman.j.user.isAgent === false && meHuman.j.user.owner === null, JSON.stringify(meHuman.j.user));
+  const openAgent = await api('POST', '/api/agent/register', { body: { name: '开放注册机器人' } });
+  check('未设注册码时开放注册成功（含 claimUrl）', openAgent.status === 200 && openAgent.j.user.isAgent === true && /^yv_[0-9a-f]{48}$/.test(openAgent.j.apiKey || '') && typeof openAgent.j.claimUrl === 'string' && openAgent.j.claimUrl.includes('?claim=') && openAgent.j.claimExpiresAt > Date.now(), JSON.stringify(openAgent.j).slice(0, 240));
+
+  // ===== 智能体注册码 + API Key 鉴权 + 认领流程：第三实例（AGENT_REGISTER_CODE 已设） =====
+  {
+    const PORT3 = 18190;
+    const BASE3 = `http://127.0.0.1:${PORT3}`;
+    const tmp3 = fs.mkdtempSync(path.join(os.tmpdir(), 'yousj-video-test3-'));
+    const DATA3 = path.join(tmp3, 'data.json');
+    const AGENT_CODE = 'agent-code-xyz';
+    const child3 = spawn(process.execPath, [path.join(dir, 'server.js')], {
+      env: { ...process.env, ...MAIL_ENV_OFF, PORT: String(PORT3), DATA_FILE: DATA3, UPLOAD_DIR: path.join(tmp3, 'uploads'), ALLOW_DEV_CODE: '1', AGENT_REGISTER_CODE: AGENT_CODE },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const api3 = async (method, p, { token, body } = {}) => {
+      const r = await fetch(BASE3 + p, {
+        method,
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      let j = null; try { j = await r.json(); } catch {}
+      return { status: r.status, j };
+    };
+    try {
+      let up3ok = false;
+      for (let i = 0; i < 50 && !up3ok; i++) {
+        try { const r = await fetch(BASE3 + '/api/health'); up3ok = r.ok; } catch {}
+        if (!up3ok) await new Promise(s => setTimeout(s, 200));
+      }
+      check('智能体测试实例启动（已设注册码）', up3ok);
+      const manifest3 = await api3('GET', '/api/agent/manifest', {});
+      check('设码后 manifest registerCodeRequired=true', manifest3.status === 200 && manifest3.j.auth.registerCodeRequired === true, JSON.stringify(manifest3.j.auth));
+
+      const wrongCode = await api3('POST', '/api/agent/register', { body: { name: '机器人小V', code: 'nope' } });
+      check('错注册码 403 且文案准确', wrongCode.status === 403 && wrongCode.j.error === '智能体注册码不对', JSON.stringify(wrongCode.j));
+      const noCode = await api3('POST', '/api/agent/register', { body: { name: '机器人小V' } });
+      check('不带注册码 403', noCode.status === 403, JSON.stringify(noCode.j));
+
+      const regAgent = await api3('POST', '/api/agent/register', { body: { name: '机器人小V', code: AGENT_CODE } });
+      const akey = regAgent.j && regAgent.j.apiKey;
+      const agentId = regAgent.j && regAgent.j.user && regAgent.j.user.id;
+      const claimToken = regAgent.j && regAgent.j.claimUrl ? regAgent.j.claimUrl.split('?claim=')[1] : '';
+      check('对码注册成功：account#号 + isAgent + yv_ key 格式', regAgent.status === 200 && /^机器人小V#\d{4}$/.test(regAgent.j.user.account || '') && regAgent.j.user.isAgent === true && /^yv_[0-9a-f]{48}$/.test(akey || ''), JSON.stringify(regAgent.j).slice(0, 240));
+      check('注册响应带 claimUrl 与 7 天内过期的 claimExpiresAt', !!claimToken && regAgent.j.claimExpiresAt > Date.now() && regAgent.j.claimExpiresAt < Date.now() + 7 * 24 * 3600 * 1000 + 60000, JSON.stringify(regAgent.j).slice(0, 240));
+
+      const dupAgent = await api3('POST', '/api/agent/register', { body: { name: '机器人小V', code: AGENT_CODE } });
+      check('同名智能体再注册 409', dupAgent.status === 409, JSON.stringify(dupAgent.j));
+
+      const meAgent = await api3('GET', '/api/me', { token: akey });
+      check('用 API Key 调 /api/me 成功且 isAgent=true、email=null', meAgent.status === 200 && meAgent.j.user.id === agentId && meAgent.j.user.isAgent === true && meAgent.j.user.email === null, JSON.stringify(meAgent.j).slice(0, 200));
+      const badKey = await api3('GET', '/api/me', { token: 'yv_' + '0'.repeat(48) });
+      check('错 API Key 401', badKey.status === 401, String(badKey.status));
+      const agentLogin = await api3('POST', '/api/login', { body: { accountOrName: regAgent.j.user.account, password: 'whatever1' } });
+      check('智能体账号走密码登录被拒 401（不崩）', agentLogin.status === 401, JSON.stringify(agentLogin.j));
+
+      // 用 key 发图文作品 -> feed / search 可见
+      const agentPub = await api3('POST', '/api/videos', { token: akey, body: { title: '智能体图文作品XYZ', desc: '由 AI 发布', videoUrl: '', posterHue: 160 } });
+      check('智能体用 key 发图文作品成功 kind=scene', agentPub.status === 200 && agentPub.j.kind === 'scene' && agentPub.j.author.id === agentId && agentPub.j.author.isAgent === true, JSON.stringify(agentPub.j).slice(0, 200));
+      const agentFeed = await api3('GET', '/api/feed?scope=recommended', { token: akey });
+      check('智能体作品出现在 feed', agentFeed.status === 200 && agentFeed.j.videos.some(v => v.id === agentPub.j.id), JSON.stringify((agentFeed.j.videos || []).length));
+      const agentSearch = await api3('GET', '/api/search?q=' + encodeURIComponent('智能体图文'), { token: akey });
+      check('智能体作品能被 search 搜到', agentSearch.status === 200 && agentSearch.j.videos.some(v => v.id === agentPub.j.id), JSON.stringify(agentSearch.j).slice(0, 160));
+
+      // 认领流程：claim-info -> 人类 claim -> owner 落定 -> 令牌失效
+      const ci = await api3('GET', '/api/agent/claim-info?token=' + encodeURIComponent(claimToken), {});
+      check('claim-info 有效令牌返回智能体（owner=null）', ci.status === 200 && ci.j.agent.id === agentId && ci.j.agent.owner === null, JSON.stringify(ci.j).slice(0, 200));
+      const ciFake = await api3('GET', '/api/agent/claim-info?token=' + 'f'.repeat(48), {});
+      check('claim-info 假令牌 404', ciFake.status === 404, String(ciFake.status));
+
+      const { verify: regOwner } = await registerViaEmail('owner@example.com', '认领主人', '123456', {}, api3);
+      const tOwner = regOwner.j.token, idOwner = regOwner.j.user.id;
+      const claim = await api3('POST', '/api/agent/claim', { token: tOwner, body: { token: claimToken } });
+      check('人类认领成功：agent.owner 指向认领者', claim.status === 200 && claim.j.agent.id === agentId && claim.j.agent.owner && claim.j.agent.owner.id === idOwner && claim.j.owner.id === idOwner, JSON.stringify(claim.j).slice(0, 240));
+      const profAfter = await api3('GET', `/api/users/${agentId}/profile`, { token: tOwner });
+      check('认领后 profile 里 publicUser.owner 正确', profAfter.status === 200 && profAfter.j.user.owner && profAfter.j.user.owner.id === idOwner && profAfter.j.user.owner.account === regOwner.j.user.account, JSON.stringify(profAfter.j.user).slice(0, 200));
+      const claimAgain = await api3('POST', '/api/agent/claim', { token: tOwner, body: { token: claimToken } });
+      check('同一令牌再 claim 失败（一次性）', claimAgain.status === 404, String(claimAgain.status) + ' ' + JSON.stringify(claimAgain.j));
+      const ciAfter = await api3('GET', '/api/agent/claim-info?token=' + encodeURIComponent(claimToken), {});
+      check('认领后 claim-info 同令牌 404', ciAfter.status === 404, String(ciAfter.status));
+
+      // AI 作品进主人页面：绑定后再发 1 条，主人 works/profile 与智能体自己 profile 都要对得上
+      const agentPub2 = await api3('POST', '/api/videos', { token: akey, body: { title: '绑定后智能体作品', desc: '', videoUrl: '', posterHue: 170 } });
+      check('绑定后智能体再发作品成功', agentPub2.status === 200 && agentPub2.j.author.id === agentId, JSON.stringify(agentPub2.j).slice(0, 160));
+      const ownerWorks = await api3('GET', '/api/me/works', { token: tOwner });
+      const ow = (ownerWorks.j.videos || []).find(v => v.id === agentPub2.j.id);
+      check('主人 /api/me/works 含智能体作品且 author 仍是智能体', ownerWorks.status === 200 && !!ow && ow.author.id === agentId && ow.author.isAgent === true, JSON.stringify((ownerWorks.j.videos || []).map(v => v.title)));
+      const ownerMe = await api3('GET', '/api/me', { token: tOwner });
+      check('主人 /api/me stats.works=2（智能体两条都计入）', ownerMe.status === 200 && ownerMe.j.stats.works === 2, JSON.stringify(ownerMe.j.stats));
+      const { verify: regPasser } = await registerViaEmail(' passer@example.com'.trim(), '路人甲', '123456', {}, api3);
+      const profOwnerByStranger = await api3('GET', `/api/users/${idOwner}/profile`, { token: regPasser.j.token });
+      check('陌生人看主人 profile：videos 含智能体作品、stats.works=2', profOwnerByStranger.status === 200 && profOwnerByStranger.j.videos.some(v => v.id === agentPub2.j.id) && profOwnerByStranger.j.stats.works === 2, JSON.stringify(profOwnerByStranger.j.stats) + ' ' + JSON.stringify((profOwnerByStranger.j.videos || []).map(v => v.title)));
+      const profAgentSelf = await api3('GET', `/api/users/${agentId}/profile`, { token: tOwner });
+      check('智能体自己 profile 仍含其全部作品（2 条）', profAgentSelf.status === 200 && profAgentSelf.j.videos.some(v => v.id === agentPub2.j.id) && profAgentSelf.j.stats.works === 2 && profAgentSelf.j.videos.every(v => v.author.id === agentId), JSON.stringify(profAgentSelf.j.stats));
+
+      // 智能体不能认领别人
+      const regAgent2 = await api3('POST', '/api/agent/register', { body: { name: '机器人小乙', code: AGENT_CODE } });
+      const claimToken2 = regAgent2.j.claimUrl.split('?claim=')[1];
+      const agentClaim = await api3('POST', '/api/agent/claim', { token: akey, body: { token: claimToken2 } });
+      check('智能体账号 claim 别人 403', agentClaim.status === 403, JSON.stringify(agentClaim.j));
+
+      // 认领链接重新生成：未绑定可随时刷新、旧链接作废；已绑定 409；人类账号 403
+      const akey2 = regAgent2.j.apiKey;
+      const humanGen = await api3('POST', '/api/agent/claim-link', { token: regPasser.j.token });
+      check('人类账号调 claim-link 403', humanGen.status === 403, JSON.stringify(humanGen.j));
+      const regen = await api3('POST', '/api/agent/claim-link', { token: akey2 });
+      const newToken2 = regen.j && regen.j.claimUrl ? regen.j.claimUrl.split('?claim=')[1] : '';
+      check('未绑定智能体重新生成认领链接 200 且链接已换新', regen.status === 200 && !!newToken2 && newToken2 !== claimToken2 && regen.j.claimExpiresAt > Date.now(), JSON.stringify(regen.j).slice(0, 200));
+      const ciOld = await api3('GET', '/api/agent/claim-info?token=' + encodeURIComponent(claimToken2), {});
+      check('旧认领链接立即作废（claim-info 404）', ciOld.status === 404, String(ciOld.status));
+      const ciNew = await api3('GET', '/api/agent/claim-info?token=' + encodeURIComponent(newToken2), {});
+      check('新认领链接可用（claim-info 200）', ciNew.status === 200 && ciNew.j.agent.name === '机器人小乙', JSON.stringify(ciNew.j).slice(0, 160));
+      const boundGen = await api3('POST', '/api/agent/claim-link', { token: akey });
+      check('已绑定智能体再生成认领链接 409', boundGen.status === 409, JSON.stringify(boundGen.j));
+
+      // 落盘检查：data.json 里绝不能有 key / 认领令牌明文
+      const rawData = fs.readFileSync(DATA3, 'utf8');
+      check('data.json 里搜不到 API Key 明文', !rawData.includes(akey), 'apiKey leaked!');
+      check('data.json 里搜不到认领令牌明文', !rawData.includes(claimToken) && !rawData.includes(claimToken2), 'claim token leaked!');
+      const parsed = JSON.parse(rawData);
+      const agentRec = parsed.users.find(u => u.id === agentId);
+      check('落盘记录：passwordHash=null、isAgent=true、只存 sha256 哈希', !!agentRec && agentRec.passwordHash === null && agentRec.isAgent === true && /^[0-9a-f]{64}$/.test(agentRec.apiKeyHash || '') && agentRec.ownerId === idOwner && agentRec.claimTokenHash === null, JSON.stringify(agentRec).slice(0, 240));
+    } finally {
+      child3.kill();
+      try { fs.rmSync(tmp3, { recursive: true, force: true }); } catch {}
+    }
+  }
+
   // ===== 压缩 size 分支：另起一个服务实例，用 COMPRESS_SIZE_BYTES=100 把阈值临时调小 =====
   // （主实例仍是默认 5GB，不受影响；这样不用造 5GB 大文件就能测到 size/both 分支）
   {
